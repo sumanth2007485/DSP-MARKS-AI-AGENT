@@ -166,7 +166,7 @@ def main():
 
                     if not df.empty:
                         df["Source File"] = file.name
-     #                   all_dfs.append(df)
+                              all_dfs.append(df)
                         st.success(f"✅ {file.name} → {len(df)} students extracted")
                     else:
                         st.warning(f"⚠️ {file.name} → No data found")
