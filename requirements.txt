@@ -11,3 +11,4 @@ googleapis-common-protos
 pydantic
 typing-extensions
 pillow
+openpyxl
