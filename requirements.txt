@@ -1,0 +1,13 @@
+streamlit
+google-generativeai
+python-dotenv
+protobuf
+grpcio
+grpcio-status
+google-ai-generativelanguage
+google-api-core
+google-auth
+googleapis-common-protos
+pydantic
+typing-extensions
+pillow

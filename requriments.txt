@@ -1,7 +1,0 @@
-streamlit
-google-generativeai
-pandas
-numpy
-openpyxl
-Pillow
-python-dotenv
