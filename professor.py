@@ -1,7 +1,7 @@
 # ============================================================
-# SmartMarks AI Agent - Gemini Vision
+# DSP Marks AI Agent - Gemini Vision
 # Upload MULTIPLE photos → Get ONE combined Excel.
-# API key auto-loaded from .env — no input needed
+# Works on BOTH local (.env) AND Streamlit Cloud (secrets)
 # ============================================================
 
 import streamlit as st
@@ -14,17 +14,25 @@ import os
 import google.generativeai as genai
 from PIL import Image
 from datetime import datetime
-from dotenv import load_dotenv
 
-# Load API key from .env file
-load_dotenv()
-API_KEY = os.getenv("GEMINI_API_KEY")
+# ============================================================
+# API KEY - Works both locally and on Streamlit Cloud
+# ============================================================
+try:
+    API_KEY = st.secrets["GEMINI_API_KEY"]
+except Exception:
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+    API_KEY = os.getenv("GEMINI_API_KEY")
 
 # ============================================================
 # PAGE CONFIG
 # ============================================================
 st.set_page_config(
-    page_title="SmartMarks AI Agent",
+    page_title="DSP Marks AI Agent",
     page_icon="📝",
     layout="centered"
 )
@@ -34,30 +42,34 @@ st.set_page_config(
 # ============================================================
 
 def get_gemini_model():
-    """Initialize Gemini Vision model using .env key."""
+    """Initialize Gemini Vision model."""
     genai.configure(api_key=API_KEY)
     model = genai.GenerativeModel("gemini-2.5-flash")
     return model
 
 
 def extract_marks_from_image(model, image: Image.Image) -> pd.DataFrame:
-    """Send image to Gemini → Get structured marks data."""
+    """Send image to Gemini → Get structured marks data with EXACT column names from source."""
 
     prompt = """Look at this marks sheet image carefully. Extract ALL student data from it.
 
-Return ONLY a valid JSON array with this exact format (no other text):
-[
-  {"roll_no": "CS101", "name": "Student Name", "marks": {"Subject1": 18, "Subject2": 16, "Total": 34}},
-  {"roll_no": "CS102", "name": "Another Student", "marks": {"Subject1": 20, "Subject2": 19, "Total": 39}}
-]
+Return ONLY a valid JSON object with this exact format (no other text):
+{
+  "columns": ["exact_col1_name", "exact_col2_name", "exact_col3_name", ...],
+  "students": [
+    {"values": ["value1", "value2", 18, 16, ...]},
+    {"values": ["value3", "value4", 20, 19, ...]}
+  ]
+}
 
 Rules:
+- The "columns" array MUST contain the EXACT column header names as written in the image (e.g., "Register No", "Name", "1.a", "1.b", "Total" — whatever is actually written)
+- Do NOT rename or standardize column names. Use them EXACTLY as they appear in the image.
+- If there's a heading like "Marks for Individual Questions" spanning multiple columns, ignore it — only use the actual sub-column headers.
 - Extract EVERY student row you can see
-- Use the actual column headers from the sheet (like IA1, IA2, Q1, Q2, Maths, Physics, etc.)
-- If there's a Total column, include it
 - If you can't read a value clearly, use your best guess
-- Roll numbers can be numeric (101) or alphanumeric (CS101)
-- Return ONLY the JSON array, nothing else"""
+- Numeric marks should be integers, text values should be strings
+- Return ONLY the JSON object, nothing else"""
 
     response = model.generate_content([prompt, image])
 
@@ -70,28 +82,28 @@ Rules:
         response_text = re.sub(r'\n?```$', '', response_text)
 
     response_text = response_text.strip()
-    students = json.loads(response_text)
+    data = json.loads(response_text)
 
-    if not students:
+    if not data or not data.get("students"):
         return pd.DataFrame()
 
-    # Convert to DataFrame
-    rows = []
-    for student in students:
-        row = {
-            "Roll No": student.get("roll_no", ""),
-            "Student Name": student.get("name", "")
-        }
-        marks = student.get("marks", {})
-        for subject, mark in marks.items():
-            row[subject] = mark
-        rows.append(row)
+    # Build DataFrame using exact column names from the image
+    columns = data["columns"]
+    rows = [student["values"] for student in data["students"]]
 
-    df = pd.DataFrame(rows)
+    df = pd.DataFrame(rows, columns=columns)
 
-    # Add Total if not present
-    if "Total" not in df.columns:
-        mark_cols = [c for c in df.columns if c not in ["Roll No", "Student Name"]]
+    # Convert numeric columns to numbers where possible
+    for col in df.columns:
+        try:
+            df[col] = pd.to_numeric(df[col])
+        except (ValueError, TypeError):
+            pass
+
+    # Add Total if not already present
+    if "Total" not in df.columns and "total" not in [c.lower() for c in df.columns]:
+        # Identify numeric mark columns (skip first two which are usually ID and Name)
+        mark_cols = df.columns[2:]
         numeric_cols = df[mark_cols].select_dtypes(include=[np.number]).columns
         if len(numeric_cols) > 0:
             df["Total"] = df[numeric_cols].sum(axis=1)
@@ -104,14 +116,15 @@ Rules:
 # ============================================================
 
 def main():
-    st.title("📝 SmartMarks AI Agent")
+    st.title("📝 DSP Marks AI Agent")
     st.write("**Upload marks sheet photos → Download Excel**")
     st.caption("Powered by Google Gemini Vision • Supports multiple files")
 
     # Check if API key exists
     if not API_KEY:
-        st.error("❌ API key not found! Add your key in the `.env` file:")
-        st.code("GEMINI_API_KEY=your_api_key_here", language="text")
+        st.error("❌ API key not found!")
+        st.info("**Local:** Add key in `.env` file\n\n**Streamlit Cloud:** Add key in Settings → Secrets")
+        st.code('GEMINI_API_KEY = "your_key_here"', language="toml")
         st.stop()
 
     st.divider()
@@ -148,25 +161,23 @@ def main():
                     text=f"🤖 Reading file {idx + 1}/{len(uploaded_files)}: {file.name}"
                 )
 
-                with st.spinner(f"Processing {file.name}..."):
-                    try:
-                        if model is None:
-                            model = get_gemini_model()
+                try:
+                    if model is None:
+                        model = get_gemini_model()
 
-                        image = Image.open(file)
-                        df = extract_marks_from_image(model, image)
+                    image = Image.open(file)
+                    df = extract_marks_from_image(model, image)
 
-                        if not df.empty:
-                            df["Source File"] = file.name
-                            all_dfs.append(df)
-                            st.success(f"✅ {file.name} → {len(df)} students extracted")
-                        else:
-                            st.warning(f"⚠️ {file.name} → No data found")
+                    if not df.empty:
+                        all_dfs.append(df)
+                        st.success(f"✅ {file.name} → {len(df)} students extracted")
+                    else:
+                        st.warning(f"⚠️ {file.name} → No data found")
 
-                    except json.JSONDecodeError:
-                        st.error(f"❌ {file.name} → Could not parse. Try a clearer photo.")
-                    except Exception as e:
-                        st.error(f"❌ {file.name} → Error: {str(e)}")
+                except json.JSONDecodeError:
+                    st.error(f"❌ {file.name} → Could not parse. Try a clearer photo.")
+                except Exception as e:
+                    st.error(f"❌ {file.name} → Error: {str(e)}")
 
             progress.progress(1.0, text="✅ All files processed!")
 
